@@ -1,5 +1,9 @@
 # ImageConvert
+![compiler](https://img.shields.io/badge/Compiler-Visual%20Studio%202017-blue.svg)
+
+
 ZJU Image Info Proc Course Archieve. All in one.
+
 
 Including [APIs](https://github.com/linwe2012/ImageConvert/blob/master/ImageConvert/ImageConvert/bmp.h):
 ```c++
