@@ -1,25 +1,26 @@
 cmake_minimum_required(VERSION 2.8.11)
-project(Image_Convert)
+project(HDR_PLUS)
 
-set(SRC_DIR "ImageConvert")
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_FLAGS "-O3 -g -Wall")
 
-set(LIB_DIR ${SRC_DIR}/lib)
-set(INCLUDE_DIR ${SRC_DIR}/include)
+set(HALIDE_ROOT_DIR "D:/includes/halide20161022")
 
-set(SRC_FILES
-	${SRC_DIR}/bmp.c
-	${SRC_DIR}/bmp.h
-	${SRC_DIR}/camera.h
-	${SRC_DIR}/config_macros.h
-	${SRC_DIR}/def_utils.h
-	${SRC_DIR}/glad.c
-	${SRC_DIR}/glim.cpp
-	${SRC_DIR}/glim.h
-	${SRC_DIR}/shader.h
-	${SRC_DIR}/Window.h
-	)
-link_directories(${LIB_DIR})
-include_directories(${INCLUDE_DIR})
-add_executable(imconvert ${SRC_FILES})
-	
+if(" ${HALIDE_ROOT_DIR}" STREQUAL " ")
+    message( FATAL_ERROR "Specify HALIDE_ROOT_DIR variable in the cmake file." )
+endif()
 
+set(src_files
+    src/HDRPlus.cpp
+    src/align.cpp
+    src/finish.cpp
+    src/merge.cpp
+    src/util.cpp
+    )
+
+include_directories(${HALIDE_ROOT_DIR}/include ${HALIDE_ROOT_DIR}/tools)
+link_directories(${HALIDE_ROOT_DIR}/bin)
+
+add_executable(hdrplus ${src_files})
+
+target_link_libraries(hdrplus Halide png)
