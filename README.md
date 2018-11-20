@@ -1,6 +1,7 @@
 # ImageConvert
 ![compiler](https://img.shields.io/badge/Compiler-Visual%20Studio%202017-blue.svg)
-![progress](http://progressed.io/bar/15?title=progress)
+
+![progress](https://img.shields.io/badge/version-0.0.1-blue.svg?maxAge=2592000)
 
 ZJU Image Info Proc Course Archieve. All in one.
 
