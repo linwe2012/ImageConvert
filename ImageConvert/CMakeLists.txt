@@ -1,26 +1,34 @@
 cmake_minimum_required(VERSION 2.8.11)
-project(HDR_PLUS)
+project(ImageConvert)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_FLAGS "-O3 -g -Wall")
+set(SRC_DIR "ImageConvert")
 
-set(HALIDE_ROOT_DIR "D:/includes/halide20161022")
+set(LIB_DIR ${SRC_DIR}/lib)
+set(INCLUDE_DIR ${SRC_DIR}/include)
 
-if(" ${HALIDE_ROOT_DIR}" STREQUAL " ")
-    message( FATAL_ERROR "Specify HALIDE_ROOT_DIR variable in the cmake file." )
-endif()
+set(SRC_FILES
+	${SRC_DIR}/bmp.c
+	${SRC_DIR}/bmp.h
+	${SRC_DIR}/camera.h
+	${SRC_DIR}/config_macros.h
+	${SRC_DIR}/def_utils.h
+	${SRC_DIR}/glad.c
+	${SRC_DIR}/glim.cpp
+	${SRC_DIR}/glim.h
+	${SRC_DIR}/shader.h
+	${SRC_DIR}/Window.h
+	)
+	
+IF (UNIX) #Unix Like System
+set(CMAKE_EXE_LINKER_FLAGS "-lGL") #add opengl to lib
+set(LIB glfw3)
+ELSEIF(WIN32)
+set(LIB glfw3.lib opengl32.lib)
+ENDIF ()
 
-set(src_files
-    src/HDRPlus.cpp
-    src/align.cpp
-    src/finish.cpp
-    src/merge.cpp
-    src/util.cpp
-    )
+link_directories(${LIB_DIR})
+link_libraries(${LIB})
+include_directories(${INCLUDE_DIR})
+add_executable(ImageConvert ${SRC_FILES})
+	
 
-include_directories(${HALIDE_ROOT_DIR}/include ${HALIDE_ROOT_DIR}/tools)
-link_directories(${HALIDE_ROOT_DIR}/bin)
-
-add_executable(hdrplus ${src_files})
-
-target_link_libraries(hdrplus Halide png)
