@@ -17,6 +17,12 @@ set(SRC_FILES
 	${SRC_DIR}/glim.h
 	${SRC_DIR}/shader.h
 	${SRC_DIR}/Window.h
+	${SRC_DIR}/Kaleidoscope.cpp
+	${SRC_DIR}/Kaleidoscope_Debugger.h
+	${SRC_DIR}/Kaleidoscope_utils.cpp
+	${SRC_DIR}/Kaleidoscope_utils.h
+	${SRC_DIR}/VariablesManagementl.h
+	${SRC_DIR}/Wrapper.h
 	)
 	
 IF (UNIX) #Unix Like System
