@@ -48,6 +48,11 @@ void smooth_ExpAvg(Image src, image_t beta, image_t threshold);
 
 ```
 
+# Wikis
+- [Script](https://github.com/linwe2012/ImageConvert/wiki/About-The-Script)
+
+- [Compile Guide](https://github.com/linwe2012/ImageConvert/wiki/Compile-Guide)
+
 # Acknowlegdement
 
 For the original `shader.h` and `camera.h`: [LearnOpenGL](https://learnopengl.com/)
