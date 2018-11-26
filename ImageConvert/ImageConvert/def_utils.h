@@ -7,7 +7,10 @@ typedef uint32_t DWORD;
 typedef uint16_t WORD;
 typedef int32_t LONG;
 typedef uint8_t BYTE;
-#endif
+#endif //_WIN32
+
+
+
 /* Part1: Image Structure
 *
 */
@@ -54,6 +57,7 @@ typedef struct tagImage
 	image_t *im; //where image data is stored.
 	int padded; //if image is padded.
 	int status; //rgb, yuv, gray, bin and so on.
+	int has_opacity;
 	MYBITMAPFILEHEADER *bmpHeader;
 	MYBITMAPFILEINFO *bmpInfo;
 	MYRGBQUAD *plate; //color plate, by default is NULL.
@@ -67,20 +71,31 @@ typedef union tagPixel {
 		image_t R;
 		image_t G;
 		image_t B;
+		image_t A;
 	};
 	struct
 	{
 		image_t Y;
 		image_t U;
 		image_t V;
+		image_t A_0;
 	};
 	struct
 	{
 		image_t Hue;
 		image_t Sat;
 		image_t Val;
+		image_t A_1;
 	};
 }Pixel;
+
+typedef struct tagVector3 Vector3;
+
+struct tagVector3 {
+	double x;
+	double y;
+	double z;
+};
 
 enum {
 	rgb,
@@ -91,6 +106,27 @@ enum {
 	binary,
 };
 
+
+
+typedef void(*Interpolation_Func)(Image src, Pixel *res, double x, double y, int color);
+typedef struct tagSTConfig *STConfig; //Spatial Transform configuration
+struct tagSTConfig {
+	Interpolation_Func itp; // Interpolation Function
+	//only part of image within bound will be applied with spatial trnsform
+	//if bounds are < 0, then it will be considered as original image width & height
+	//e.g. if bounds[0].x < 0 while bounds[1].x = 100, only from left to 100 pixels will be transformed
+	Vector3 bounds[2]; 
+	//default pixel if can't find a match for dst
+	Pixel empty; 
+	//whether it should add an alpha channel.
+	//if it is set to 1, an alpha channel is added even if source image w/o one 
+	//This is not mendatory for functions, so e.g. scale will ignore it
+	//It only works when opacity is necessary to output, e.g. rotation.
+	int has_opacity;
+	//if source img has no alpha channel while dst requires one, 
+	// dst's alpha channel will be set to default_alpha
+	image_t default_alpha; 
+};
 /* Part2: Basic oprations defined by macros
 *
 */
@@ -99,12 +135,14 @@ int row_name = image->bmpInfo->biHeight;\
 int col_name = image->bmpInfo->biWidth;\
 int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 
-#define FUNC_TRAVERSE_PIXEL(image_data_pointer, type_name, row_name, col_name, row_witdh_name, do_somthing) do{ \
+#define FUNC_TRAVERSE_PIXEL(image_data_pointer, type_name, step, row_name, col_name, row_witdh_name, do_before_loop, do_somthing) do{ \
 	int i, j; \
 	type_name *imptr = NULL; \
 	for (i = 0; i<row_name; i++) { \
 		imptr = (type_name *)(image_data_pointer + (row_witdh_name) * i); \
-		for (j = 0; j<col_name; j++, imptr++) { \
+		do_before_loop;\
+		for (j = 0; j<col_name; j++) { \
+			imptr =  (type_name *)((char *)imptr+step); \
 			do_somthing; \
 		} \
 	} \
@@ -116,8 +154,22 @@ int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 	C = C_SRC;\
 	}while(0);
 
+#define FUNC_DO_NOTHING {}
+
 #define VAR_MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define VAR_MIN(a, b) (((a) < (b)) ? (a) : (b))
+
+#ifdef __cplusplus
+#define __CAST_KERNAL(type, x) static_cast<type>(x)
+#else
+#define __CAST_KERNAL(type, x) (type)(x)
+#endif // __cplusplus
+
+#define CAST_INT(x) __CAST_KERNAL(int, (x))
+#define CAST_UINT8_T(x) __CAST_KERNAL(uint8_t, (x))
+#define CAST_IMAGE_T(x) __CAST_KERNAL(image_t, (x))
+
+#define SPATIAL_DIMS 3
 
 /*small micros return pointer to image/matrix according coordination.
 * row_xxx_width must defined to tell micros the width of a image.
@@ -129,25 +181,19 @@ int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 /* Part2: Necessary function
 *
 */
-
-void throwWarn(const char *s)
-{
-	static int cnt = 0;
-
-	printf("[WARNING] %s\n", s);
-	if (!cnt) {
-		printf("Program can proceed with warning, but may yield unexpected results.\n");
-		printf("Ctrl+C to end the program if you don't know what's going on.\n");
-	}
-
-	cnt++;
-}
+// FILE *GLIM_Global_Output_Specify; //by default is adding to stdout
+#define GLIM_Global_Output_Specify stdout
+#define GLIM_LOG_OUTPUT(...) fprintf(GLIM_Global_Output_Specify, __VA_ARGS__)
+#define GLIM_LOG_OUTPUT_V(...) vfprintf(GLIM_Global_Output_Specify, __VA_ARGS__)
 
 #ifdef __cplusplus
 #define EXTERNC extern "C"
 #else
 #define EXTERNC
-#endif
+#endif // __cplusplus
+
+EXTERNC void throwWarn(const char *s, ...);
+EXTERNC void throwNote(const char *s, ...);
 
 EXTERNC Image newImage();
 EXTERNC Image destroyImage(Image im);
@@ -161,4 +207,4 @@ EXTERNC void createPlate(Image dst);
 EXTERNC void copyImageInfo(Image dst, Image src);
 EXTERNC void setBmpInfo(Image src, const char* fmt, ...);
 #undef EXTERNC
-#endif
+#endif // _DEF_UTILS_H_

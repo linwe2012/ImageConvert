@@ -1,6 +1,4 @@
-#define  _CRT_SECURE_NO_WARNINGS
-#include <glad\glad.h>
-#include <GLFW\glfw3.h>
+#define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -14,7 +12,7 @@
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
 
-std::map<int, Window*> windows;
+std::map<GLFWwindow*, Window*> windows;
 std::vector<Window*> windows_recyle;
 Window* currentWindow = NULL;
 static int WindowID = 0;
@@ -38,7 +36,7 @@ int glimInit()
 * c - camera
 * s - texture
 */
-int figure(const char *title, const char *fmt, ...)
+GLFWwindow *figure(const char *title, const char *fmt, ...)
 {
 	const char *default_title = "Open GL";
 	int *looking = (int *)&fmt;
@@ -70,16 +68,16 @@ int figure(const char *title, const char *fmt, ...)
 	}
 	Window *window = new Window(title, width, height, anti_alising, camera);
 	window->initShader(shader);
-	windows[WindowID] = window;
+	windows[window->window] = window;
 	currentWindow = window;
-	return WindowID++;
+	return window->window;
 }
 
 void refreshWindows(int *handles)
 {
 	Window *win;
 	if (handles == NULL) {
-		std::map<int, Window*>::iterator itr;
+		std::map<GLFWwindow *, Window*>::iterator itr;
 		for (itr = windows.begin(); itr != windows.end();) {
 			itr->second->refresh();
 			if (itr->second->window == NULL) {
@@ -92,7 +90,7 @@ void refreshWindows(int *handles)
 		}
 	}
 	else {
-		for (int *ptr = handles; *ptr > 0; ptr++) {
+		/*for (int *ptr = handles; *ptr > 0; ptr++) {
 			win = windows[*ptr];
 			win->refresh();
 			if (win->window == NULL) {
@@ -100,7 +98,7 @@ void refreshWindows(int *handles)
 				delete win;
 			}
 			
-		}
+		}*/
 	}
 }
 
@@ -116,10 +114,10 @@ void imload_stbi(Image im, const char *path)
 	stbi_set_flip_vertically_on_load(true);
 	unsigned char *data = stbi_load(path, &col, &row, &color, 3);
 	int row_width = (3 * col + 3) & ~3;
-	resizeImage(im, row * row_width);
+	resizeImage(im, (1+row) * row_width);
 	setBmpInfo(im, "wh", col, row);
 	unsigned char *ptr = data;
-	FUNC_TRAVERSE_PIXEL(im->im, Pixel, row, col, row_width, {
+	FUNC_TRAVERSE_PIXEL(im->im, Pixel, sizeof(image_t) * imcolorCnt(im), row, col, row_width, FUNC_DO_NOTHING, {
 		imptr->B = *ptr++;
 		imptr->G = *ptr++;
 		imptr->R = *ptr++;
@@ -140,52 +138,81 @@ void imshow(Image src)
 {
 	int row = src->bmpInfo->biHeight;
 	int col = src->bmpInfo->biWidth;
-	int row_width = (3 * col + 3) & ~3;
+	int color = imcolorCnt(src);
+	int row_width = (color * col + 3) & ~3;
 	int osz[] = { row, col };
 	int size[2] = { 1, 1 };
 	int gap[2] = { 0 };
 	int k;
+	
 	for (k = 0; k < 2; k++) {
 		while (size[k] < osz[k]) {
 			size[k] *= 2;
 		}
 		gap[k] = (size[k] - osz[k]) / 2;
 	}
-	unsigned char *data = new unsigned char[size[0] * size[1] * 3 + 1];
+	unsigned char *data = new unsigned char[size[0] * size[1] * 4 + 1];
 	unsigned char *ptr = data;
 	do {
 		int i, j;
 		Pixel *imptr = NULL;
 		for (i=0; i < gap[0]; i++) {
 			for (j = 0; j < size[1]; j++) {
+
 				*ptr++ = static_cast<unsigned char>(51);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
+
+				*ptr++ = static_cast<unsigned char>(0);
 			}
 		}
 		for (; i < row + gap[0]; i++) {
 			imptr = (Pixel *)(src->im + (row_width)* (i - gap[0]));
 			for (j = 0; j < gap[1]; j++) {
+				
+
 				*ptr++ = static_cast<unsigned char>(51);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
+
+				*ptr++ = static_cast<unsigned char>(100);
 			}
-			for (; j<col+gap[1]; j++, imptr++) {
+			for (; j<col+gap[1]; j++) {
+				imptr = (Pixel*)((image_t*)imptr + color);
+				
+
 				*ptr++ = static_cast<unsigned char>(imptr->B);
 				*ptr++ = static_cast<unsigned char>(imptr->G);
 				*ptr++ = static_cast<unsigned char>(imptr->R);
+
+				if(color == 4)
+					*ptr++ = static_cast<unsigned char>(imptr->A);
+				else
+					*ptr++ = static_cast<unsigned char>(255);
 			}
 			for (; j < size[1]; j++) {
+				
+
 				*ptr++ = static_cast<unsigned char>(51);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
+
+				*ptr++ = static_cast<unsigned char>(100);
 			} 
 		} 
 		for (; i < size[0]; i++) {
 			for (j = 0; j < size[1]; j++) {
-				*ptr++ = static_cast<unsigned char>(51);
+
+				*ptr++ = static_cast<unsigned char>(255);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
 				*ptr++ = static_cast<unsigned char>(0.3 * 255);
+				
+
+				// *ptr++ = static_cast<unsigned char>(51);
+				// *ptr++ = static_cast<unsigned char>(0.3 * 255);
+				// *ptr++ = static_cast<unsigned char>(0.3 * 255);
+
+				*ptr++ = static_cast<unsigned char>(0);
 			}
 		}
 	} while (0);
@@ -193,7 +220,48 @@ void imshow(Image src)
 	currentWindow->diplayImage(data, size[1], size[0]);
 	delete[] data;
 	currentWindow->refresh();
+	
 }
+
+void registerDropFile(GLFWwindow *win, GLFWdropfun dropfun) {
+	static char loading[20] = "Loading...";
+	// windows[win]->texts.texts->content = loading;
+	windows[win]->registerDropFile(dropfun);
+}
+/*
+void addTextByPointer(GLFWwindow *win, Vector3 pos, Vector3 color, float scale, const char *indicator )
+{
+	TextInfo txtinfo;
+	txtinfo.color.r = color.x;
+	txtinfo.color.g = color.y;
+	txtinfo.color.b = color.z;
+
+	txtinfo.position.x = pos.x;
+	txtinfo.position.y = pos.y;
+	txtinfo.position.z = pos.z;
+
+	txtinfo.scale = scale;
+	txtinfo.content = indicator;
+	windows[win]->addText(txtinfo);
+}
+
+
+
+void setImageProcessWindow(GLFWwindow *glfwwin, GLFWdropfun dropfun)
+{
+	static char welcome[40] = "Welcome.Drop file to get started";
+	TextInfo txtinfo;
+	Window *win = windows[glfwwin];
+	txtinfo.color = glm::vec3(1.0f, 1.0f, 1.0f);
+	txtinfo.position = glm::vec3(300.0f, 300.0f, 1.0f);
+	txtinfo.scale = 0.6f;
+	txtinfo.content = welcome;
+	
+	
+	win->addText(txtinfo);
+	win->registerDropFile(dropfun);
+}
+*/
 //code dump
 #if 0
 void test()

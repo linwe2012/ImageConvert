@@ -1,4 +1,6 @@
-#define _CRT_SECURE_NO_WARNINGS
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define  _CRT_SECURE_NO_WARNINGS
+#endif // !_CRT_SECURE_NO_WARNINGS
 #include"bmp.h"
 #include "glim.h"
 #if 1
@@ -9,6 +11,9 @@
 #include <io.h> 
 #include <math.h>
 #include "config_macros.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "utils/stb_image_write.h"
+#include "GLFW/glfw3.h"
 #define DIMENSIONS 3
 
 /* function naming method:
@@ -26,15 +31,19 @@ Image newImage()
 	im->bmpInfo = (MYBITMAPFILEINFO *)malloc(sizeof(MYBITMAPFILEINFO));
 	im->padded = 0;
 	im->status = rgb;
+	im->has_opacity = FALSE;
 	im->plate = NULL;
 	im->name = NULL;
 	return im;
 }
 Image destroyImage(Image im)
 {
+	printf("Image %s is deleted.\n", im->name);
 	free(im->bmpHeader);
 	free(im->bmpInfo);
 	free(im->im);
+	free(im->name);
+	if (im->plate) free(im->plate);
 	free(im);
 	return NULL;
 }
@@ -42,10 +51,14 @@ Image destroyImage(Image im)
 /* imcolorCnt -- return how many bytes one pixel takes
 */
 int imcolorCnt(Image src){
-	if(src->status == rgb || src->status == yuv || src->status == ycbcr || src->status == hsv)
-		return 3;
+	//if(src->status == rgb || src->status == yuv || src->status == ycbcr || src->status == hsv)
+		//return 3;
+	//else
+		//return 1;
+	if (src->status == gray || src->status == binary)
+		return src->has_opacity + 1;
 	else
-		return 1;
+		return src->has_opacity + 3;
 }
 
 /* imsize -- calculate image size
@@ -74,7 +87,7 @@ Image imread(const char *filePath, Image im) {
 	uint8_t *temp = NULL;
 	FILE *fp = fopen(filePath, "rb");
 	if (fp == NULL) {
-		throwWarn("read::Fails to open file.");
+		throwWarn("read::Fails to open file: %s.", filePath);
 		return NULL;
 	}
 	if (im == NULL) {
@@ -84,7 +97,7 @@ Image imread(const char *filePath, Image im) {
 	//sizeof is unreliable cuz system will align elements by 4 bytes
 	if (im->bmpHeader->bfType != 0x4D42)
 	{
-		throwWarn("read::Unknown file type.Will use stbi to load image");
+		throwNote("read::Unknown file type. Will use stbi to load image");
 		fclose(fp);
 		imload_stbi(im, filePath);
 	}
@@ -128,7 +141,7 @@ void updateImageName(Image src, const char *s){
 		name_cnt ++;
 	}
 	if(src->name != NULL) src->name = (char *)realloc(src->name, name_cnt);
-	else src->name = (char *)malloc(name_cnt);
+	else src->name = (char *)malloc(name_cnt + 1);
 	if(s[name_len] == '\\' || s[name_len] == '/' || name_len < 0) ++name_len;
 	strcpy(src->name, s + name_len);
 }
@@ -138,11 +151,37 @@ void updateImageName(Image src, const char *s){
 int imwrite(const char  *filePath, Image im) {
 	int i;
 	if (im == NULL || im->im == NULL) return -1;
-	if (_access(filePath, 0) == 0) throwWarn("write::File already exist. Will overwrite it.");
+	if (_access(filePath, 0) == 0) throwNote("write::File: %s already exist. Will overwrite it.", filePath);
 	FILE *fp = fopen(filePath, "wb");
-	int color = (im->status == gray || im->status == binary) ? 1 : 3;
-	int imagesz = ((color * im->bmpInfo->biWidth + 3) & ~3) * im->bmpInfo->biHeight;
+	int color = imcolorCnt(im);
+	int row = im->bmpInfo->biHeight;
+	int col = im->bmpInfo->biWidth;
+	int row_width = (color * col + 3) & ~3;
+	int imagesz = row_width * row;
+	int success;
 	uint8_t *temp = (uint8_t *)malloc(sizeof(uint8_t) * imagesz);
+	uint8_t *tmp_end = temp + imagesz;
+	if (imagesz > 1 * 1024 * 1024) //over one MB
+	{
+		fclose(fp);
+		int k = 0;
+		throwNote("write::The images seems quite big, will use stbi to write. PNG Compression may take a while.");
+		FUNC_TRAVERSE_PIXEL(im->im, Pixel, color * sizeof(image_t), (row), col, row_width, FUNC_DO_NOTHING, {
+			temp[k++] = CAST_UINT8_T(imptr->B);
+			temp[k++] = CAST_UINT8_T(imptr->G);
+			temp[k++] = CAST_UINT8_T(imptr->R);
+			if(color == 4)
+				temp[k++] = CAST_UINT8_T(imptr->A);
+		});
+		stbi_flip_vertically_on_write(TRUE);
+		success = stbi_write_png(filePath, col, row, color, temp, col * color);
+		if (!success) {
+			throwWarn("Fails to write in files");
+		}
+		free(temp);
+		return 0;
+	}
+	
 	for (i = 0; i<imagesz; i++)
 	{
 		temp[i] = (uint8_t)(im->im[i]);
@@ -251,8 +290,9 @@ void setBmpInfo(Image src, const char* fmt, ...)
 	DWORD iclrvip = 0x0;
 	DWORD fSize = iSizeImage + foffbits;
 	DWORD *visit;
-	char *c = fmt;
+	const char *c = fmt;
 	visit = (DWORD *)(&fmt + 1);
+	DWORD tmp;
 	if (fmt != NULL) {
 		while (*c) {
 			if (*c == 'w') {
@@ -260,6 +300,11 @@ void setBmpInfo(Image src, const char* fmt, ...)
 			}
 			else if (*c == 'h') {
 				iheight = *visit++;
+			}
+			else if (*c == 'c') {
+				tmp = *visit++;
+				iPlanes_biBitCount = iPlanes_biBitCount & 0xFFFF;
+				iPlanes_biBitCount = iPlanes_biBitCount | (tmp << 16);
 			}
 			c++;
 		}
@@ -296,22 +341,27 @@ Image colorSpaceTransform(Image dst, Image src, double mat[DIMENSIONS][DIMENSION
 	int row_width = (3 * col + 3) & ~3;
 	Pixel *sp, *dp, *pp;
 	int cnt = 0;
+	int color = imcolorCnt(src);
 	if (dst == NULL) {
 		dst = newImage();
 	}
 	if (src != dst) resizeImage(dst, row_width * row);
+
 	for (i = 0; i<row; i++) {
 		temp = row_width * i;
 		sp = (Pixel *)(src->im + temp);
 		dp = (Pixel *)(dst->im + temp);
-		for (j = 0; j<col; j++, sp++, dp++) {
+		for (j = 0; j<col; j++) {
+			sp = (Pixel*)((image_t*)sp + color);
+			dp = (Pixel*)((image_t*)dp + color);
+
 			R = sp->R;
 			G = sp->G;
 			B = sp->B;
 			
-			dp->Y = mat[0][0] * R + mat[0][1] * G + mat[0][2] * B + vec[0];
-			dp->U = mat[1][0] * R + mat[1][1] * G + mat[1][2] * B + vec[1];
-			dp->V = mat[2][0] * R + mat[2][1] * G + mat[2][2] * B + vec[2];
+			dp->Y = CAST_IMAGE_T(mat[0][0] * R + mat[0][1] * G + mat[0][2] * B + vec[0]);
+			dp->U = CAST_IMAGE_T(mat[1][0] * R + mat[1][1] * G + mat[1][2] * B + vec[1]);
+			dp->V = CAST_IMAGE_T(mat[2][0] * R + mat[2][1] * G + mat[2][2] * B + vec[2]);
 			pp = dp;
 			cnt ++;
 		}
@@ -423,7 +473,8 @@ Image rgb2hsv(Image dst, Image src){
 	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width)
 	dst = duplicateImage(dst, src);
 	image_t max, min, R, G, B, gap;
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width, {
+	//FUNC_TRAVERSE_PIXEL(image_data_pointer, type_name, step, row_name, col_name, row_witdh_name, do_defore_loop, do_somthing)
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(src), row, col, row_width, FUNC_DO_NOTHING, {
 		R = imptr->R;
 		G = imptr->G;
 		B = imptr->B;
@@ -458,7 +509,7 @@ Image hsv2rgb(Image dst, Image src){
 	int Hi;
 	image_t f, p, q, t;
 	
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width, {
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(src), row, col, row_width, FUNC_DO_NOTHING,{
 		H = imptr->Hue;
 		S = imptr->Sat;
 		V = imptr->Val;
@@ -510,7 +561,7 @@ void rearrangeGrayScale(Image im, int method)
 		for (i = 0; i<row; i++) {
 			imptr = im->im + row_witdh * i;
 			for (j = 0; j<col; j++, imptr++) {
-				imptr[0] = (imptr[0] - min) * scaler;
+				imptr[0] = CAST_IMAGE_T((imptr[0] - min) * scaler);
 			}
 		}
 	}
@@ -599,8 +650,7 @@ Image hdr_log(Image dst, Image src)
 	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width)
 	// tmp = rgb2yuv(tmp, src);
 	dst = rgb2hsv(dst, src);
-	//FUNC_TRAVERSE_PIXEL(image_data_pointer, type_name, row_name, col_name, row_witdh_name, do_somthing)
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width ,{ 
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(dst), row, col, row_width, FUNC_DO_NOTHING,{
 		if(mmax < imptr->Val) 
 			mmax = imptr->Val;
 		if(max_Sat < imptr->Sat) 
@@ -610,10 +660,10 @@ Image hdr_log(Image dst, Image src)
 		sum += imptr->Val / row;
 		});
 	sum = sum / col;
-	image_t log_max = log(mmax + 1);
+	image_t log_max = logf(mmax + 1);
 	image_t temp;
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width ,{
-		temp = (log(imptr->Val + 1)  / log_max);
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(dst), row, col, row_width, FUNC_DO_NOTHING,{
+		temp = (logf(imptr->Val + 1)  / log_max);
 		imptr->Val = temp * mmax;
 		// imptr->Sat = imptr->Sat * (1 / (temp / 2 + 1) * 0.1 + 1 - 1 / 1.5 * 0.1);
 		// temp = imptr->Sat / (max_Sat - min_Sat);
@@ -635,7 +685,7 @@ void denoise_medianFilter(Image src, image_t max, image_t min)
 		-3,                      0,              3,
 		 row_width - 3,  row_width,  row_width + 3,
 	};
-	FUNC_TRAVERSE_PIXEL(src->im, Pixel, (row - 1), (col - 1), row_width ,{
+	FUNC_TRAVERSE_PIXEL(src->im, Pixel, sizeof(image_t) * imcolorCnt(src), (row - 1), (col - 1), row_width, FUNC_DO_NOTHING,{
 		if(i==0 || j == 0) continue;
 		ptr = (image_t*)(&imptr->Val);
 		for(chnl=2;chnl<3;chnl++, ptr++){
@@ -662,7 +712,7 @@ void smooth_ExpAvg(Image src, image_t beta, image_t threshold)
 	for(chnl=0;chnl<3;chnl++)
 		v_ij[chnl] = src->im[chnl];
 	
-	FUNC_TRAVERSE_PIXEL(src->im, Pixel, row, col, row_width ,{
+	FUNC_TRAVERSE_PIXEL(src->im, Pixel, sizeof(image_t) * imcolorCnt(src), row, col, row_width, FUNC_DO_NOTHING, {
 		ptr = (image_t*)imptr;
 		for(chnl=0;chnl<3;chnl++, ptr++){
 			if(fabs(v_ij[chnl] - *ptr) >= threshold){
@@ -681,8 +731,12 @@ Image histequal(Image dst, Image src, int *chnls)
 	image_t *dp;
 	int k, c, buf;
 	image_t histogram[3][256] = { 0 };
-	image_t inc = 255.0 / row / col;
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width ,{
+	image_t inc = CAST_IMAGE_T(255.0 / row / col);
+	if (src->status == rgb || src->status == gray) 
+	{
+		throwWarn("histequal::Image is RGB or Gray, which is not supported.");
+	}
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(dst), row, col, row_width, FUNC_DO_NOTHING, {
 		dp = (image_t *)imptr;
 		for (k = 0; chnls[k] >= 0; k++) {
 			buf = (int)(*(dp + chnls[k]));
@@ -700,7 +754,7 @@ Image histequal(Image dst, Image src, int *chnls)
 		}
 	}
 	int cnt = 0;
-	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, row, col, row_width ,{
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * imcolorCnt(dst), row, col, row_width, FUNC_DO_NOTHING, {
 		dp = (image_t *) imptr; 
 		for(k=0;chnls[k] > 0; k++)
 			*(dp+chnls[k]) = histogram[k][(int)(*(dp+chnls[k]))];
@@ -740,7 +794,7 @@ image_t otsu(Image src)
 		temp = u0_w0 / div - mean; //u0 - mean
 		g = temp * temp * w0 / (1 - w0); //current variance
 		if (gMax < g) {
-			threshold = i;
+			threshold = CAST_IMAGE_T(i);
 			gMax = g;
 		}
 	}
@@ -776,7 +830,7 @@ Image gray2binary(Image dst, Image src)
 		src_ptr = grayscale->im + row_width * i;
 		dst_ptr = dst->im + row_width * i;
 		for (j = 0; j<col; j++, dst_ptr++, src_ptr++) {
-			*dst_ptr = (*src_ptr > threshold) ? 255 : 0;
+			*dst_ptr = CAST_IMAGE_T((*src_ptr > threshold) ? 255 : 0);
 		}
 	}
 	dst->status = binary;
@@ -828,7 +882,7 @@ Image erode_dilation_filter(Image dst, Image src, image_t *kernel,int kwidth, in
 				y = 0;
 				for (v = j - starty; v <= j + starty; v++) {
 					//determine if this pixel is 0 or 1
-					temp = (*IMAGE_POINTER(op, u, v) < maxBin); 
+					temp = CAST_IMAGE_T(*IMAGE_POINTER(op, u, v) < maxBin);
 					res += *MAT2D_POINTER(kernel, x, y) * temp;
 					y++;
 				}
@@ -877,46 +931,439 @@ Image closing(Image dst, Image src, image_t *kernel, int kwidth, int kheight)
 	dst = dilation(dst, src, kernel, kwidth, kheight);
 	return erode(dst, dst, kernel, kwidth, kheight);
 }
+
+/* newSTConfig
+* fmt: specifies which configures will override default
+* * * fmt can be NULL, which everything will be default
+* ...: 
+**** flags *****
+* i: Interpolation_Func
+* * - 0: BinlinerInterpolation
+* l,r,t,b: left[sinistral] right[dextral] top[up] bottom[down], boundries -- must be doubles!!!!
+* o: opacity -- int
+* R,G,B,A: empty pixelse -- double
+*/
+STConfig newSTConfig(const char *fmt, ...)
+{
+	STConfig stc = (STConfig)malloc(sizeof(struct tagSTConfig));
+	const char* wander = fmt;
+	char *visit = (char *)(&fmt + 1);
+	double *fptr = NULL;
+	image_t *imptr = NULL;
+
+	stc->itp = BinlinerInterpolation;
+	stc->has_opacity = 1;
+	stc->default_alpha = CAST_IMAGE_T(255);
+
+	stc->bounds[0].x = -1;
+	stc->bounds[0].y = -1;
+	stc->bounds[0].z = -1;
+	stc->bounds[1].x = -1;
+	stc->bounds[1].y = -1;
+	stc->bounds[1].z = -1;
+
+
+	memset(&stc->empty, 0, sizeof(Pixel)); //pixel by default is all 0
+
+	if (fmt != NULL) {
+		while (*wander) {
+			if (*wander == 'i') {
+
+			}
+			else if(*wander == 'l' || *wander == 'r' || *wander == 't' || *wander == 'b')
+			{
+				switch (*wander) {
+				case 'l': fptr = &stc->bounds[0].x; break;
+				case 'r': fptr = &stc->bounds[1].x; break;
+				case 't': fptr = &stc->bounds[0].y; break;
+				case 'b': fptr = &stc->bounds[1].y; break;
+				default: //do nothing -- impossible
+					break;
+				}
+				*fptr = *(double *)visit;
+				visit += sizeof(double);
+			}
+			else if (*wander == 'o')
+			{
+				stc->has_opacity = (*(int *)visit) ? 1 : 0;
+				visit += sizeof(int);
+			}
+			else if (*wander == 'R' || *wander == 'G' || *wander == 'B' || *wander == 'A') 
+			{
+				switch (*wander) {
+				case 'R':imptr = &stc->empty.R; break;
+				case 'G':imptr = &stc->empty.G; break;
+				case 'B':imptr = &stc->empty.B; break;
+				case 'A':imptr = &stc->empty.A; break;
+				default: //do nothing -- impossible
+					break;
+				}
+				*imptr = CAST_IMAGE_T(*(double *)visit);
+				visit += sizeof(double);
+			}
+			wander++;
+		}
+	}
+	return stc;
+}
+STConfig destroySTConfig(STConfig stc) {
+	free(stc);
+	return NULL;
+}
+
+void BinlinerInterpolation(Image src, Pixel *res, double x, double y, int color)
+{
+	DEF_IMAGE_ROW_WIDTH(src, src_row, src_col, row_src_width);
+	int x0 = CAST_INT(x);
+	int y0 = CAST_INT(y);
+	double dx = x - x0;
+	double dy = y - y0;
+	image_t *ptr = (src->im + row_src_width * y0 + x0 * color);//28d58
+	image_t *src_ptr;
+	image_t *res_ptr = (image_t *)res;
+	int i;
+	memset(res, 0, sizeof(Pixel)); //set result to 0;
+	/*
+	  (x0,y0)----------(x1, y0)------>x
+		|        |
+		|        dy       
+		|        |
+		|--dx--(x,y)      
+		|
+	  (x0,y1)----------(x1, y1)
+	    |
+		|
+	   y\/
+	*/
+	image_t *test = ptr;
+	for (i = 0; i < color; i++) {
+		src_ptr = ptr;
+		*res_ptr += CAST_IMAGE_T(*src_ptr * (1 - dx)*(1 - dy)); //top left
+
+		src_ptr = ptr + color;
+		*res_ptr += CAST_IMAGE_T(*src_ptr * dx * (1 - dy)); //top right
+
+		src_ptr = ptr + row_src_width;
+		*res_ptr += CAST_IMAGE_T(*src_ptr * (1 - dx) * dy); //bottom left
+
+		src_ptr += color;
+		*res_ptr += CAST_IMAGE_T(*src_ptr * dx * dy); //bottom right
+
+		
+		//shift to next channel
+		ptr++;
+		res_ptr++;
+	}
+}
+
+/* spatialTransform transform image according to inverted matrix
+* dst, src must already allocated with space
+* invmat: inverted matrix, a matrix transform dst coordinates into src coordinates
+* stc: specifies Interpolation method, default pixel value, and transform region
+*/
+Image spatialTransform(Image dst, Image src, double invmat[SPATIAL_DIMS][SPATIAL_DIMS], STConfig stc)//Pixel empty, Interpolation_Func itp, int top, int right, int bottom, int left)
+{
+	int src_color = imcolorCnt(src);
+	int dst_color = imcolorCnt(dst);
+	DEF_IMAGE_ROW_WIDTH(dst, dst_row, dst_col, row_dst_width);
+	DEF_IMAGE_ROW_WIDTH(src, src_height, src_width, row_src_width);
+	double src_x, src_y;
+	image_t *collector, *sink;
+	Pixel collect;
+	int chnl;
+	int top    = CAST_INT((stc->bounds[0].y<0)? 1          :stc->bounds[0].y);
+	int right  = CAST_INT((stc->bounds[1].x<0)? src_width  :stc->bounds[1].x);
+	int bottom = CAST_INT((stc->bounds[1].y<0)? src_height :stc->bounds[1].y);
+	int left   = CAST_INT((stc->bounds[0].x<0)? 1          :stc->bounds[0].x);
+	int flag_has_alpha = 0;
+	Interpolation_Func itp = stc->itp;
+
+	image_t *sink_end = dst->im + dst_row * row_dst_width;
+	// printf("dst row=%d, col=%d, color=%d, row_wi=%d\n", dst_row, dst_col, dst_color, row_src_width);
+	FUNC_TRAVERSE_PIXEL(dst->im, Pixel, sizeof(image_t) * dst_color, dst_row - 1, dst_col, row_dst_width, FUNC_DO_NOTHING, {
+		src_x = invmat[0][0] * j + invmat[0][1] * i + invmat[0][2];
+		src_y = invmat[1][0] * j + invmat[1][1] * i + invmat[1][2];
+
+		flag_has_alpha = (src_color == 4);
+
+		//out of image boundry
+		//sample from user defined empty Pixel
+		if (src_x >= src_width - 1 || src_x <= 0 || src_y >= src_height - 1 || src_y <= 0) {
+			flag_has_alpha = 1;
+			collector = (image_t *)&stc->empty;
+		}
+		//out of spatial transform boundry
+		//directly sample from image at exact point
+		else if (src_x > right - 1 || src_x < left - 1 || src_y > bottom - 1 || src_y < top - 1) 
+			collector = src->im + i * row_src_width + j * src_color;
+		//collector happens to sit on the image boundry, may cause read vilation for Interpolation function
+		//sample from edge without any interpolation
+		else if(src_x == 0 || src_y == 0 || src_x == src_width - 1 || src_y == src_height){
+			collector = src->im + CAST_INT(src_y) * row_src_width + CAST_INT(src_x) * src_color;
+		}
+		else {
+			itp(src, &collect, src_x, src_y, src_color);
+			collector = (image_t *)&collect;
+		}
+
+		//Pour the color collected from source into sink (aka. dst)
+		sink = (image_t *)(imptr);
+		for (chnl = 0; chnl < dst_color; chnl++) 
+			if (chnl == 3 && !flag_has_alpha) //srouce has no alpha channel but sink requires a alpha channel
+				*sink++ = stc->default_alpha;
+			else
+				*sink++ = *collector++;
+		if (sink_end - sink < 0)
+		{
+			printf("overflow by %d bytes i=%d,j=%d, \n", i, j, sink- sink_end);
+			getchar();
+		}
+	});
+	return dst;
+}
 #endif
-#if 1
+
+/* imtranslate -- translate a image and return the result.
+* x means move right x pixels, while y moves image downwards.
+*/
+Image imtranslate2d(Image src, Vector3 direction, STConfig stc)
+{
+	Image dst = newImage();
+	int width = src->bmpInfo->biWidth + CAST_INT(fabs(direction.x));
+	int height = src->bmpInfo->biHeight + CAST_INT(fabs(direction.y));
+	dst->status = src->status;
+	dst->has_opacity = (stc->has_opacity) ? 1 : 0;
+	int color = imcolorCnt(dst);
+	int ww = (color * width + 3) & ~3;
+
+	setBmpInfo(dst, "whc", width, height, color * 8);
+	resizeImage(dst, ww * height + 1);
+
+	double invmat[SPATIAL_DIMS][SPATIAL_DIMS] = {
+		1, 0, -direction.x,
+		0, 1, -direction.y,
+		0, 0, 1,
+	};
+
+	return spatialTransform(dst, src, invmat, stc);
+}
+
+/* imrotate2d -- rotate image along an axis by theta anti-clockwise
+* theta: the rotation angle
+* axis: rotation axis, note that only x, y coordinates are read, rests are discarded.
+* stc: spatial transform configuration
+* output: a new image after roatation.
+*/
+Image imrotate2d(Image src, double theta, Vector3 *axis, STConfig stc)
+{
+	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width);
+	double ct = cos(theta);
+	double st = sin(theta);
+	int width  = CAST_INT(fabs(row * st) + fabs(col * ct) + 1);
+	int height = CAST_INT(fabs(row * ct) + fabs(col * st) + 1);
+	Image dst = newImage();
+	Vector3 tmpaxis;
+	double x_hat, y_hat;
+	dst->has_opacity = (stc->has_opacity) ? 1:0;
+	int color_channel = imcolorCnt(dst);
+	int ww = (color_channel * width + 3) & ~3;
+	int flag_stcDestroy = 0;
+
+	//axis by default is image center
+	if (axis == NULL) {
+		tmpaxis.x = col / 2.0;
+		tmpaxis.y = row / 2.0;
+		axis = &tmpaxis;
+	}
+	if (stc == NULL) {
+		flag_stcDestroy;
+		stc = newSTConfig(NULL);
+	}
+	//include translation into consideration
+	x_hat = axis->x + (width - col)  / 2.0;
+	y_hat = axis->y + (height - row) / 2.0;
+
+	double invmat[SPATIAL_DIMS][SPATIAL_DIMS] = {
+		 ct,  st, -x_hat * ct - y_hat * st + axis->x,
+		-st,  ct,  x_hat * st - y_hat * ct + axis->y,
+		  0,   0,  1,
+	};
+	resizeImage(dst, ww * height + 1);
+	setBmpInfo(dst, "whc", width, height, color_channel * 8);
+	dst->padded = 1;
+	
+	Pixel empty = { 0 , 0, 0, 0 };
+	spatialTransform(dst, src, invmat, stc);
+
+	if (flag_stcDestroy) destroySTConfig(stc);
+	return dst;
+}
+
+/* imscale2d -- scale the image as specified by [vertor3]scaler
+* scaler: the scaler, in 2d cases, only x, y is concerned.
+* stc: spatial transform configuration - ignores has_opacity.
+* output: a new image after roatation.
+*/
+Image imscale2d(Image src, Vector3 scaler, STConfig stc)
+{
+	Image dst = newImage();
+	int width = CAST_INT(src->bmpInfo->biWidth * scaler.x);
+	int height = CAST_INT(src->bmpInfo->biHeight * scaler.y);
+	int ww = (imcolorCnt(src) * width + 3) & ~3;
+
+	setBmpInfo(dst, "wh", width, height);
+	resizeImage(dst, height * ww + 1);
+
+	double invmat[SPATIAL_DIMS][SPATIAL_DIMS] = {
+		1.0 / scaler.x, 0, 0,
+		0, 1.0 / scaler.y, 0,
+		0, 0, 1,
+	};
+
+	return spatialTransform(dst, src, invmat, stc);
+}
+
+/* imflip2d -- flip the image as specified by mirror line
+* mirror: mirror line, 
+* * - if mirror.x > 0, then flip around x
+* * - if mirror.y > 0, flip around y
+* * - if both x,y > 0, flip around x and y
+* stc: spatial transform configuration - ignores has_opacity.
+* output: a new image after roatation.
+*/
+Image imflip2d(Image src, Vector3 mirror, STConfig stc)
+{
+	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width);
+	Image dst = newImage();
+
+	copyImageInfo(dst, src);
+	resizeImage(dst, row_width * row + 1);
+
+	double x = 1.0, y = 1.0;
+	double w = 0.0, h = 0.0;
+	if (mirror.x > 0) {
+		x = -1.0;
+		w = col-1;
+	}
+	if (mirror.y > 0) {
+		y = -1.0;
+		h = row-1;
+	}
+	double invmat[SPATIAL_DIMS][SPATIAL_DIMS] = {
+		x, 0, w,
+		0, y, h,
+		0, 0, 1,
+	};
+	return spatialTransform(dst, src, invmat, stc);
+}
+
+Image imshear2d(Image src, Vector3 factor, STConfig stc)
+{
+	Image dst = newImage();
+	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width);
+	int width  = col + CAST_INT(fabs(factor.x) * row);
+	int height = row + CAST_INT(fabs(factor.y) * col);
+	dst->has_opacity = (stc->has_opacity) ? 1 : 0;
+	dst->status = src->status;
+	int color = imcolorCnt(dst);
+	int ww = (color * width + 3) & ~3;
+	resizeImage(dst, ww * height + 1);
+	setBmpInfo(dst, "whc", width, height, color * 8);
+	double denomitor = 1 - factor.x * factor.y;
+	if (denomitor == 0) {
+		denomitor = 0.000001;
+	}
+	double invmat[SPATIAL_DIMS][SPATIAL_DIMS] = {
+		1.0 / denomitor, -factor.x / denomitor, 0,
+		-factor.y / denomitor,1.0/denomitor, 0,
+		0, 0, 1,
+	};
+	return spatialTransform(dst, src, invmat, stc);
+}
+
+void throwWarn(const char *s, ...)
+{
+	static int cnt = 0;
+
+	GLIM_LOG_OUTPUT("[WARNING] ");
+
+	va_list args;
+	va_start(args, s);
+	GLIM_LOG_OUTPUT_V(s, args);
+	va_end(args);
+
+	GLIM_LOG_OUTPUT("\n");
+
+
+	if (!cnt) {
+		GLIM_LOG_OUTPUT("Program can proceed with warning, but may yield unexpected results.\n");
+		GLIM_LOG_OUTPUT("Ctrl+C to end the program if you don't know what's going on.\n");
+	}
+	cnt++;
+}
+
+void throwNote(const char *s, ...)
+{
+	GLIM_LOG_OUTPUT("[Note] ");
+
+	va_list args;
+	va_start(args, s);
+	GLIM_LOG_OUTPUT_V(s, args);
+	va_end(args);
+
+	GLIM_LOG_OUTPUT("\n");
+}
+
+#if 0
 int main()
 {
 	int idx[] = { 2, -1 };
+
 	
-	Image im_lo = imread("./locontrast_tree.bmp", NULL);
+
+	
+	Image im = imread("./madrid_hdr.bmp", NULL);
+	
+	STConfig stc = newSTConfig(NULL);
+
+	Image im_ro = imrotate2d(im, 0.5, NULL, stc);
+	throwNote("Rotation Complete. Ready to write to file.");
+	imwrite("./madrid_rotate.png", im_ro);
+	im_ro = destroyImage(im_ro);
+	throwNote("Image After rotation saved at madrid_rotate.png");
+	
+	Vector3 factor = {0.1, 0.05, 0};
+	Image im_shear = imshear2d(im, factor, stc);
+	imwrite("./madrid_shear.png", im_shear);
+	im_shear = destroyImage(im_shear);
+	throwNote("Image After shear saved at madrid_shear.png");
+	
+	Image im_mirror = imflip2d(im, factor, stc);
+	imwrite("./madrid_mirror.png", im_mirror);
+	im_mirror = destroyImage(im_mirror);
+	throwNote("Image After flipped saved at madrid_mirror.png");
+	
+	Vector3 scaler = { 0.7, 1.01, 0 };
+	Image im_large = imscale2d(im, scaler, stc);
+	imwrite("./madrid_scale_large.png", im_large);
+	im_large = destroyImage(im_large);
+	throwNote("Image After scaled saved at madrid_scale_large.png");
+	
+	Vector3 direction = { 300, 100, 0 };
+	Image im_trans = imtranslate2d(im, direction, stc);
+	imwrite("./madrid_trans.png", im_trans);
+	im_trans = destroyImage(im_trans);
+	throwNote("Image After translation saved at madrid_trans.png");
+	
+	/*
 	Image hist = rgb2hsv(NULL, im_lo);
 	histequal(hist, hist, idx);
 	hsv2rgb(hist, hist);
 	imwrite("./locontrast_tree_hist.bmp", hist);
 
 	Image im_da = imread("./madrid.jpg", NULL);
-	/*
-	DEF_IMAGE_ROW_WIDTH(im_da, row, col, row_width);
-	Pixel *ptr = NULL;
-	printf("row=%d, col=%d, row_width=%d\n", row, col, row_width);
-	FUNC_TRAVERSE_PIXEL(im_da->im, Pixel, row, col, row_width, {
-		if (ptr > imptr) {
-			printf("i=%d,j=%d,%p\t", i ,j, imptr);
-		
-		}
-		ptr = imptr;
-		/*
-		ptr = (Pixel *)(im_dda->im + ((image_t *)imptr - im_da->im));
-		if (fabsf(imptr->R - ptr->R) > 3) {
-			printf("R:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->R - ptr->R, imptr, ptr);
-		}
-		else if (fabsf(imptr->G - ptr->G) > 3) {
-			printf("G:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->G - ptr->G, imptr, ptr);
-		}
-		else if (fabsf(imptr->B - ptr->B) > 3) {
-			printf("B:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->B - ptr->B, imptr, ptr);
-		}
-		
-	});*/
-	
 	Image hdr = hdr_log(im_da, im_da);
 	imwrite("./madrid_hdr.bmp", hdr);
-
 
 	printf("Showing image is still an experimental feature.\nDue to my limited kownlegde of OpenGL, it consumes extravagant resources.\nWill you still want to display image? Y/n:");
 	char c = getchar();
@@ -936,10 +1383,58 @@ int main()
 			refreshWindows(NULL);
 		}
 	}
-
+	*/
 	printf("-------------------ENDS----------------------\n");
 	printf("Press any Key to exit.\n");
 	getchar();
 	return 0;
 }
+#endif
+
+#if 0
+Global_Images.imgs = (Image *)malloc(sizeof(Image) * 20);
+Global_Images.cnt = 0;
+Global_Images.max = 20;
+typedef struct tagImageUnion ImageUnion;
+struct tagImageUnion {
+	Image *imgs;
+	int cnt;
+	int max;
+};
+ImageUnion Global_Images;
+void fileDealer(GLFWwindow* window, int count, const char** paths)
+{
+	int i;
+	for (i = 0; i < count; i++) {
+		Global_Images.imgs[Global_Images.cnt++] = imread(paths[i], NULL);
+	}
+	STConfig stc = newSTConfig(NULL);
+	Image im_ro = imrotate2d(Global_Images.imgs[0], 0.5, NULL, stc);
+	imshow(im_ro);
+	destroyImage(im_ro);
+	printf("HI, Drop Called");
+}
+// [in] int main()
+DEF_IMAGE_ROW_WIDTH(im_da, row, col, row_width);
+Pixel *ptr = NULL;
+printf("row=%d, col=%d, row_width=%d\n", row, col, row_width);
+FUNC_TRAVERSE_PIXEL(im_da->im, Pixel, row, col, row_width, {
+	if (ptr > imptr) {
+		printf("i=%d,j=%d,%p\t", i ,j, imptr);
+
+	}
+ptr = imptr;
+
+ptr = (Pixel *)(im_dda->im + ((image_t *)imptr - im_da->im));
+if (fabsf(imptr->R - ptr->R) > 3) {
+printf("R:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->R - ptr->R, imptr, ptr);
+}
+else if (fabsf(imptr->G - ptr->G) > 3) {
+printf("G:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->G - ptr->G, imptr, ptr);
+}
+else if (fabsf(imptr->B - ptr->B) > 3) {
+printf("B:i=%d,j=%d,m=%f,pos=%p,opos=%p\n", i, j, imptr->B - ptr->B, imptr, ptr);
+}
+
+});
 #endif
