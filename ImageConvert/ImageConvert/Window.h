@@ -8,10 +8,11 @@
 #include <map>
 #include "shader.h"
 #include "camera.h"
-
+// #include "TextObject.h"
 
 
 #define GLFLOAT(X) static_cast<float>(X)
+typedef void(*GLIM_CB_DropFile)(int count, char **path);
 
 class Window
 {
@@ -46,6 +47,7 @@ public:
 		scroll_map[window] = this;
 		glfwSetScrollCallback(window, glim_scroll_callback);
 		glfwSetInputMode(window, GLFW_LOCK_KEY_MODS, GLFW_TRUE);
+		glfwSetDropCallback(window, glim_drop_call_back);
 		if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 		{
 			printf("Failed to initialize GLAD");
@@ -56,6 +58,8 @@ public:
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		*/
 		// glEnable(GL_DEPTH_TEST);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // GL_ONE_MINUS_SRC_ALPHA);
 		if (camera_status) {
 			startCamera();
 		}
@@ -70,6 +74,7 @@ public:
 		glGenVertexArrays(1, &VAO);
 		glGenBuffers(1, &VBO);
 		glGenBuffers(1, &EBO);
+		//texts.init(width, height);
 	}
 	void initShader(int shader_status)
 	{
@@ -91,9 +96,9 @@ public:
 		delete[] vs;
 		delete[] fs;
 	}
-	void diplayImage(unsigned char *data, int width, int height)
+	void diplayImage(unsigned char *data, int width, int height, float dp = -1.0f)
 	{
-		float sz = 0.5f, dp = -1.0f;
+		float sz = 0.5f;
 		float vertices[] = {
 			// positions       // colors       // texture coords
 			 2 * sz, sz , dp,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
@@ -136,7 +141,7 @@ public:
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 			glGenerateMipmap(GL_TEXTURE_2D);
 		}
 		shader.use();
@@ -160,6 +165,9 @@ public:
 			
 			// if (allowCamera)
 			processCamera();
+
+			// if (texts != NULL)
+			// renderText();
 
 			if (hasImage)
 				renderImage(0);
@@ -187,7 +195,8 @@ public:
 	{
 		allowCamera = true;
 		firstMouse = true;
-		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+		if(camera_status & CAMERA_3D)
+			glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	}
 	void cancelCamera(int Mode)
 	{
@@ -197,8 +206,26 @@ public:
 			camera->BudgeCamera(0.0f, 0.7f);
 		}
 	}
+	void registerDropFile(GLFWdropfun dropfun) {
+		this->dropfun = dropfun;
+	}
+	/*
+	void addText(TextInfo txtinfo) {
+		
+		if (texts = NULL) {
+			texts = new TextObject();
+			texts->init(win_width, win_height);
+		}
+		texts.addText(txtinfo);
+	}
+	void renderText()
+	{
+		texts.texts[0].scale = 0.6 + 0.01*sin(glfwGetTime());
+		texts.renderAll(camera);
+	}*/
 	GLFWwindow* window;
 	Shader shader;
+	// TextObject texts;
 	int shader_status;
 
 	int hasImage;
@@ -217,6 +244,7 @@ public:
 	int win_width, win_height;
 	bool firstMouse = true;
 	static std::map<GLFWwindow*, Window *> scroll_map;
+	GLFWdropfun dropfun = NULL;
 	static void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 	{
 		glViewport(0, 0, width, height);
@@ -231,6 +259,14 @@ public:
 	}
 	static void glim_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 		scroll_map[window]->camera->ProcessMouseScroll(GLFLOAT(yoffset));
+	}
+	static void glim_drop_call_back(GLFWwindow* window, int count, const char** paths) {
+		if (scroll_map[window]->dropfun != NULL) {
+			scroll_map[window]->dropfun(window, count, paths);
+		}
+		else {
+			printf("Oops, You haven't register a file receiver in this window.");
+		}
 	}
 private:
 	double mouse_xpos, mouse_ypos;
