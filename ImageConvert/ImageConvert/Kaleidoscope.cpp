@@ -10,6 +10,7 @@
 #include "Wrapper.h"
 #include "Kaleidoscope_utils.h"
 
+#define DEBUG_LEVEL 1
 //===----------------------------------------------------------------------===//
 // Lexer
 //===----------------------------------------------------------------------===//
@@ -27,6 +28,22 @@ enum Token {
 	tok_blockstart = -11,
 };
 
+enum BinOps {
+	bos_equal, // ==
+	bos_misequal, //!=
+	bos_larger, // >
+	bos_smaller, // <
+	bos_larger_or_eq, // >=
+	bos_smaller_or_eq, // <=
+	bos_and, // &
+	bos_or, // |
+	bos_xor, //^
+	bos_shift_left, // <<
+	bos_shift_rigt,
+	bos_logic_and,// &&
+	bos_logic_or, // ||
+};
+
 static std::string IdentifierStr;  // Filled in if tok_identifier
 static double NumVal;              // Filled in if tok_number
 static std::stringstream CurTopExpr; //record current line of expression
@@ -37,7 +54,12 @@ static int gettok(K_INPUT) {
 	static int LastChar = ' ';
 	// Skip any whitespace.
 	while (isspace(LastChar)) {
-		if (islineend(LastChar)) CurLine++;
+		if (islineend(LastChar)) {
+#if DEBUG_LEVEL >= 1
+			GlobalDebugger.nextLine();
+#endif
+			CurLine++;
+		}
 		LastChar = ss.get();
 	}
 	if (isalpha(LastChar) || LastChar == '_') { // identifier: [a-zA-Z][a-zA-Z0-9]*
@@ -154,7 +176,7 @@ public:
 
 /// IfExprAST - Expression class for if/then/else.
 class IfExprAST : public ExprAST {
-	std::unique_ptr<ExprAST> Cond, Then, Else;
+	ExprAST *Cond, *Then, *Else;
 
 public:
 	IfExprAST(ExprAST* Cond, ExprAST* Then, ExprAST* Else)
@@ -311,7 +333,7 @@ static ExprAST* ParseBlockExpr(K_INPUT) {
 	if (CurTok != '}') {
 		while (1) {
 			ExprAST *Arg = ParseExpression(K_INPUT_PASSON);
-			if (!Arg) return 0;
+			// if (!Arg) return 0; Block allows empty block;
 			Args.push_back(Arg);
 
 			if (CurTok == '}') break; //stop on change of line
@@ -369,6 +391,8 @@ static ExprAST *ParsePrimary(K_INPUT) {
 	case tok_array:      return ParseArrayExpr(K_INPUT_PASSON);
 	case tok_del:        return ParseDelExpr(K_INPUT_PASSON);
 	case tok_number:     return ParseNumberExpr(K_INPUT_PASSON);
+	case tok_blockstart: return ParseBlockExpr(K_INPUT_PASSON);
+	case tok_if:         return ParseIfExpr(K_INPUT_PASSON);
 	case '(':            return ParseParenExpr(K_INPUT_PASSON);
 	}
 }
@@ -523,8 +547,22 @@ static void HandleTopLevelExpression(K_INPUT, EXE_INPUT) {
 	// Evaluate a top-level expression into an anonymous function.
 	FunctionAST *func = ParseTopLevelExpr(K_INPUT_PASSON);
 	if (func) {
-		fprintf(stderr, "Parsed a top-level expr\n");
-		func->execute(EXE_INPUT_NAME, K_INPUT_PASSON);//---------------------------------------------TODO: Possible Mem Leak
+		
+		// fprintf(stderr, "Parsed a top-level expr\n");
+		// GlobalDebugger.throwNote(
+		// 	KDebugger::note_level::_2_may_be_useful, KDebugger::thrower_level::_3, 
+		// 	"Top Level Expr","%s", GlobalDebugger.getCurrentLine()
+		// );
+#if DEBUG_LEVEL >= 1
+#ifdef _WIN32
+		HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+		SetConsoleTextAttribute(handle, FOREGROUND_INTENSITY);
+#endif //_WIN32
+		printf("Parsed a top-level expr: ");
+		GlobalDebugger.printcode(GlobalDebugger.getCurrentLine());
+		printf("\n");
+#endif // DEBUG_LEVEL >= 1
+		func->execute(EXE_INPUT_NAME, K_INPUT_PASSON);
 	}
 	else {
 		// Skip token for error recovery.
@@ -592,12 +630,15 @@ VariableDetail* NumberExprAST::execute(EXE_INPUT, K_INPUT) {
 
 VariableDetail* IfExprAST::execute(EXE_INPUT, K_INPUT) {
 	VariableDetail* vd = Cond->execute(EXE_INPUT_NAME, K_INPUT_PASSON);
-	double flag = 0;
-	if (vd->type == vt_double) {
-		flag = *(double *)(vd->data);
+	VariableDetail* res = NULL;
+	if (vd->istrue()) {
+		res = Then->execute(EXE_INPUT_NAME, K_INPUT_PASSON);
 	}
-	
-	return NULL;/////////////////////////////////////////////////////////////////////////////////////////////////////
+	else {
+		res = Else->execute(EXE_INPUT_NAME, K_INPUT_PASSON);
+	}
+	delete this; //suicide
+	return vd;
 }
 
 VariableDetail* CallExprAST::execute(EXE_INPUT, K_INPUT) {
@@ -616,7 +657,8 @@ VariableDetail* CallExprAST::execute(EXE_INPUT, K_INPUT) {
 	}
 	
 	if (Callee == "__std_func_Array") {
-		vd = new VariableDetail("@", vt_array, vars, vm.getDestructor(vt_array));
+
+		vd = vm.newVar(vars);
 		do_not_clean_vars = true;
 	}
 	else if (Callee == "__std_func_Del") {
@@ -625,29 +667,29 @@ VariableDetail* CallExprAST::execute(EXE_INPUT, K_INPUT) {
 	}
 	else if (Callee == "imwrite") {
 		std::vector<VariableDetail*> &vvvv = *vars;
-		if (vars->size() == 1) vars->push_back(new VariableDetail("@", vt_nullptr, NULL, NULL));
+		if (vars->size() == 1) vars->push_back(vm.newVar()); //nullptr
 		imwrite((char *)(*vars)[0]->data, (Image)(*vars)[1]->data);
-		vd = new VariableDetail("@", vt_nullptr, NULL, NULL);
+		vd = vm.newVar();
 	}
 	else if (Callee == "imread") {
-		if ((*vars).size() == 1) (*vars).push_back(new VariableDetail("@", vt_nullptr, NULL, NULL));
+		if ((*vars).size() == 1) (*vars).push_back(vm.newVar());
 		Image im = imread((char *)(*vars)[0]->data, (Image)(*vars)[1]->data);
-		vd = new VariableDetail("@", vt_Image, im, vm.getDestructor(vt_Image));
+		vd = vm.newVar(im);
 	}
 	else if (Callee == "imtranslate2d") {
-		vd = imtranslate2d_wrap(vars);
+		vd = imtranslate2d_wrap(vars, EXE_INPUT_NAME);
 	}
 	else if (Callee == "imrotate2d") {
-		vd = imrotate2d_wrap(vars);
+		vd = imrotate2d_wrap(vars, EXE_INPUT_NAME);
 	}
 	else if (Callee == "imscale2d") {
-		vd = imscale2d_wrap(vars);
+		vd = imscale2d_wrap(vars, EXE_INPUT_NAME);
 	}
 	else if (Callee == "imflip2d") {
-		vd = imflip2d_wrap(vars);
+		vd = imflip2d_wrap(vars, EXE_INPUT_NAME);
 	}
 	else if (Callee == "imshear2d") {
-		vd = imshear2d_wrap(vars);
+		vd = imshear2d_wrap(vars, EXE_INPUT_NAME);
 	}
 	else if (Callee == "figure") {
 		vd = figure_wrap(vars);
@@ -656,7 +698,7 @@ VariableDetail* CallExprAST::execute(EXE_INPUT, K_INPUT) {
 		vd = imshow_wrap(vars);
 	}
 	else if (Callee == "script") {
-		if ((*vars)[0]->type != vt_string) {
+		if ((*vars)[0]->proto->type != vt_string) {
 			printf("Expected script be a string of file path\n");
 		}
 		else {
@@ -672,7 +714,7 @@ VariableDetail* CallExprAST::execute(EXE_INPUT, K_INPUT) {
 	}
 cleanup:
 	for (std::vector<VariableDetail*>::iterator it = vars->begin(); it < vars->end() && !do_not_clean_vars; it++) {
-		vm.destroyIfTemp(*it);
+		vm.deleteIfTemp(*it);
 	}
 	delete this; //commit suicide
 	return vd;
@@ -691,23 +733,14 @@ VariableDetail *BinaryExprAST::execute(EXE_INPUT, K_INPUT) {
 	switch (Op)
 	{
 	case '=':
-		lhs->shallowCpy(rhs);
-		rhs->data = NULL; //protect data transfered to lhs
-		delete rhs;
-		vm.insert(lhs);
+		*lhs = *rhs;
 		res = lhs;
+		rhs = vm.deleteIfTempProtectDataIfShallow(rhs);
 		break;
-	case '+':
-		// connect 2 string
-		//if (lhs->type == vt_string && rhs->type == vt_string) {//----------------------TODO: Type check is crrently crippled cuz type is not passed currectly
-		{
-			char *data = auto_strmerge((char*)lhs->data, (char *)rhs->data);
-			res = new VariableDetail("@", vt_string, data, vm.getDestructor(vt_string));
-		}
-		//}
-		//else {
-			//--------------------------------------------------------------------------TODO
-		//}
+	case '+'://---------------------------------------------------------TODO: Data Type Check
+		res = *lhs + *rhs;
+		vm.deleteIfTempProtectDataIfShallow(lhs);
+		vm.deleteIfTempProtectDataIfShallow(rhs);
 		break;
 	default:
 		break;
@@ -717,21 +750,7 @@ VariableDetail *BinaryExprAST::execute(EXE_INPUT, K_INPUT) {
 }
 
 VariableDetail *VariableExprAST::execute(EXE_INPUT, K_INPUT) {
-	int type = vt_unkown_type;
-	char *str = NULL;
-	if (isquotation(Name[0])) {
-		str = new char[Name.size() + 1];
-		type = vt_string;
-		strcpy(str, Name.c_str() + 1);
-		Name = "@"; //string should be anonymous
-	}
-	VariableDetail* vd = vm.getVarByName(Name);
-	if (vd != NULL) {
-		// We get it from storage since it is a declared varibale
-	}
-	else {
-		vd = vm.insert(str, type, Name);
-	}
+	VariableDetail* vd = vm.newVar(Name);
 	delete this; //commit suicide	
 	return vd;
 }
@@ -755,21 +774,13 @@ int main()
 	pipeStdin(ss);
 	getNextToken(ss);
 	MainLoop(ss, VarMap);
+
+	//if (setjmp(GlobalDebugger.jump_buffer) != 0) {
+	//	//operate if error occurs
+	//}
 	return 0;
 }
 #endif
 #if 0
-
-int c = 1;
-while (c > 0) {
-	c = ss.get();
-	if (c <= 0) {
-		printf("\nedl=%d\n", c);
-	}
-	printf("%c", c);
-}
-is.close();
-is.open("./script.py");
-ss << is.rdbuf();
 
 #endif

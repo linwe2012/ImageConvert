@@ -3,24 +3,31 @@
 #ifdef _WIN32
 #include <Windows.h>
 #endif // _WIN32
+#include "Kaleidoscope_Debugger.h"
+extern KDebugger GlobalDebugger;
 
+void cleanupSSBuffer(K_INPUT) {
+	ss.clear();
+	ss.str("");
+}
 
 static int OperationOccuppied = false;
 void pipeFile(const char *file, K_INPUT) {
-	if (ss.eof()) ss.clear();
+	if (ss.eof()) cleanupSSBuffer(K_INPUT_PASSON);// ss.clear();
 	std::ifstream is(file);
 	if (!is.is_open()) {
-		printf("Fails To Open File.\n");
+		GlobalDebugger.throwWarning(KDebugger::warning_level::_3_less_severe, KDebugger::thrower_level::_1, "PipeFile", "Fails To Open File.");
 	}
 	else {
 		ss << is.rdbuf();
+		GlobalDebugger.pipeContent(ss);
 		printf("Executing Script \"%s\"\n", file);
 	}
 	is.close();
 }
 
 void pipeStdin(K_INPUT) {
-	if (ss.eof()) ss.clear();
+	if (ss.eof()) cleanupSSBuffer(K_INPUT_PASSON); //ss.clear();
 	else if (OperationOccuppied) {
 		OperationOccuppied = false;  
 		return;
@@ -28,6 +35,7 @@ void pipeStdin(K_INPUT) {
 	static char buf[1024];
 	std::cin.getline(buf, 1024);
 	ss << buf;
+	GlobalDebugger.pipeContent(ss);
 }
 /*suggestOperation -- add str into stdin
 * It will fail silently, exception handled by caller.
@@ -54,6 +62,7 @@ int suggestOperation(const char *cmd, K_INPUT)
 		printf("\n");
 		OperationOccuppied = true;
 		ss << cmd;
+		GlobalDebugger.pipeContent(ss);
 	}
 	else {
 		printf("\r" TERMINAL_INDICATOR "[-Comman Cancelled-]                                                                                                                                                                     \n");
