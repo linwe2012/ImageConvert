@@ -1,6 +1,8 @@
 #ifndef SHADER_H
 #define SHADER_H
 
+#define  _CRT_SECURE_NO_WARNINGS
+
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 
