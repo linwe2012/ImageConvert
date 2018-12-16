@@ -90,11 +90,26 @@ typedef union tagPixel {
 }Pixel;
 
 typedef struct tagVector3 Vector3;
-
 struct tagVector3 {
 	double x;
 	double y;
 	double z;
+};
+
+typedef struct tagConv2ConfigBox Conv2ConfigBox;
+struct tagConv2ConfigBox {
+	image_t * kernel; //convolution kernel
+	// kernel width & height
+	int kwidth;
+	int kheight;
+	int step; //conv step
+	int *layers; // which layers(dimension) it implemnts on.
+	//bounds of top-letf and right bottom
+	//conv only applied within bounds,
+	//if bounds<=1, then metric will be regarded as ratio, 
+	//otherwise metric is assumed as pixels
+	Vector3 bounds[2];
+	int skip;
 };
 
 enum {
@@ -106,7 +121,12 @@ enum {
 	binary,
 };
 
-
+enum {
+	imtype_jpg,
+	imtype_bmp,
+	imtype_png,
+	imtype_unkown,
+};
 
 typedef void(*Interpolation_Func)(Image src, Pixel *res, double x, double y, int color);
 typedef struct tagSTConfig *STConfig; //Spatial Transform configuration
@@ -135,6 +155,16 @@ int row_name = image->bmpInfo->biHeight;\
 int col_name = image->bmpInfo->biWidth;\
 int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 
+/* FUNC_TRAVERSE_PIXEL -- macro to traverse pixel
+* typename - the type of pointer to manipulate, (i.e. [imptr])
+* step - the step by !BYTES
+* row_name - the row of iamge
+* col_name - colum of image
+* row_width - the width of a row, note that row_width 
+* . . . . . - is by the type of image_data_pointer
+* do_before_loop - do something before the inner loop
+* do_somthing - do somthing in the loop
+*/
 #define FUNC_TRAVERSE_PIXEL(image_data_pointer, type_name, step, row_name, col_name, row_witdh_name, do_before_loop, do_somthing) do{ \
 	int i, j; \
 	type_name *imptr = NULL; \
@@ -142,8 +172,8 @@ int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 		imptr = (type_name *)(image_data_pointer + (row_witdh_name) * i); \
 		do_before_loop;\
 		for (j = 0; j<col_name; j++) { \
-			imptr =  (type_name *)((char *)imptr+step); \
 			do_somthing; \
+			imptr = (type_name *)((char *)imptr + step); \
 		} \
 	} \
 }while(0);
@@ -168,6 +198,14 @@ int row_width_name = (imcolorCnt(image) * col_name + 3) & ~3;
 #define CAST_INT(x) __CAST_KERNAL(int, (x))
 #define CAST_UINT8_T(x) __CAST_KERNAL(uint8_t, (x))
 #define CAST_IMAGE_T(x) __CAST_KERNAL(image_t, (x))
+#if _MSC_VER
+inline uint8_t CAST_UINT8_ENFORCE_RANGE(image_t x) {
+	if (x > 255) return 255U;
+	else if (x < 0) return 0U;
+	return __CAST_KERNAL(uint8_t, x);
+}
+#elif _GNU_C
+#endif
 
 #define SPATIAL_DIMS 3
 

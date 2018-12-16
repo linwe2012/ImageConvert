@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <io.h> 
+#include <io.h>
 #include <math.h>
 #include "config_macros.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -22,7 +22,6 @@
 * 
 * do ## Image
 */
-
 Image newImage()
 {
 	Image im = (Image)malloc(sizeof(ImageBox));
@@ -38,6 +37,7 @@ Image newImage()
 }
 Image destroyImage(Image im)
 {
+	if (im == NULL) return NULL;
 	printf("Image %s is deleted.\n", im->name);
 	free(im->bmpHeader);
 	free(im->bmpInfo);
@@ -48,17 +48,30 @@ Image destroyImage(Image im)
 	return NULL;
 }
 
-/* imcolorCnt -- return how many bytes one pixel takes
+/* imcolorCnt -- return how many image_t one pixel takes
 */
 int imcolorCnt(Image src){
-	//if(src->status == rgb || src->status == yuv || src->status == ycbcr || src->status == hsv)
-		//return 3;
-	//else
-		//return 1;
 	if (src->status == gray || src->status == binary)
 		return src->has_opacity + 1;
 	else
 		return src->has_opacity + 3;
+}
+
+int getImageTypeByPostfix(const char *name) {
+	static char namebuf[10] = { 0 };
+	if (name == NULL) return imtype_unkown;
+	int len = strlen(name);
+	int i;
+	for (i = 0; i < 10 && len > 0; i++) {
+		namebuf[i] = name[--len];
+		if (name[len] == '.')
+			break;
+	}
+	namebuf[i] = '\0';
+	if (strcmp(namebuf, "gnp") == 0) return imtype_png;
+	else if (strcmp(namebuf, "gpj") == 0) return imtype_jpg;
+	else if (strcmp(namebuf, "pmb") == 0) return imtype_bmp;
+	else return imtype_unkown;
 }
 
 /* imsize -- calculate image size
@@ -70,7 +83,7 @@ int imsize(Image src){
 	int col = src->bmpInfo->biWidth;
 	int row_width = (imcolorCnt(src) * col + 3) & ~3;
 	if(src->padded == 1)
-		return row * row_width;
+		return row * row_width; //row_width already included imcolorCnt()
 	else
 		return row * col * imcolorCnt(src);
 }
@@ -150,7 +163,7 @@ void updateImageName(Image src, const char *s){
 //if it is grayscale, it will use color plate and 8bit each pixel
 int imwrite(const char  *filePath, Image im) {
 	int i;
-	if (im == NULL || im->im == NULL) return -1;
+	if (im == NULL || im->im == NULL || filePath == NULL) return -1;
 	if (_access(filePath, 0) == 0) throwNote("write::File: %s already exist. Will overwrite it.", filePath);
 	FILE *fp = fopen(filePath, "wb");
 	int color = imcolorCnt(im);
@@ -161,20 +174,27 @@ int imwrite(const char  *filePath, Image im) {
 	int success;
 	uint8_t *temp = (uint8_t *)malloc(sizeof(uint8_t) * imagesz);
 	uint8_t *tmp_end = temp + imagesz;
-	if (imagesz > 1 * 1024 * 1024) //over one MB
+	int imtype = getImageTypeByPostfix(filePath);
+
+	if ((imtype == imtype_unkown && imagesz > 1 * 1024 * 1024) || imtype == imtype_jpg || imtype == imtype_png) //over one MB
 	{
 		fclose(fp);
 		int k = 0;
-		throwNote("write::The images seems quite big, will use stbi to write. PNG Compression may take a while.");
+		imtype = (imtype == imtype_unkown) ? imtype_png : imtype;
+		if(imtype == imtype_png)
+			throwNote("write::The image seems quite big, will use stbi to write. PNG Compression may take a while.");
 		FUNC_TRAVERSE_PIXEL(im->im, Pixel, color * sizeof(image_t), (row), col, row_width, FUNC_DO_NOTHING, {
-			temp[k++] = CAST_UINT8_T(imptr->B);
-			temp[k++] = CAST_UINT8_T(imptr->G);
-			temp[k++] = CAST_UINT8_T(imptr->R);
+			temp[k++] = CAST_UINT8_ENFORCE_RANGE(imptr->B);
+			temp[k++] = CAST_UINT8_ENFORCE_RANGE(imptr->G);
+			temp[k++] = CAST_UINT8_ENFORCE_RANGE(imptr->R);
 			if(color == 4)
-				temp[k++] = CAST_UINT8_T(imptr->A);
+				temp[k++] = CAST_UINT8_ENFORCE_RANGE(imptr->A);
 		});
 		stbi_flip_vertically_on_write(TRUE);
-		success = stbi_write_png(filePath, col, row, color, temp, col * color);
+		if (imtype == imtype_png)
+			success = stbi_write_png(filePath, col, row, color, temp, col * color);
+		else
+			success = stbi_write_jpg(filePath, col, row, color, temp, 0);
 		if (!success) {
 			throwWarn("Fails to write in files");
 		}
@@ -184,7 +204,7 @@ int imwrite(const char  *filePath, Image im) {
 	
 	for (i = 0; i<imagesz; i++)
 	{
-		temp[i] = (uint8_t)(im->im[i]);
+		temp[i] = CAST_UINT8_ENFORCE_RANGE(im->im[i]);
 	}
 
 	if (im->padded == 0)
@@ -1280,6 +1300,299 @@ Image imshear2d(Image src, Vector3 factor, STConfig stc)
 	};
 	return spatialTransform(dst, src, invmat, stc);
 }
+/* conv_oob_resolver_flip - filp it out of boundry
+*/
+enum {
+	conv_oob_up = 0x1,
+	conv_oob_down = 0x2,
+	conv_oob_left = 0x4,
+	conv_oob_right = 0x8,
+};
+// void conv_oob_resolver_flip(int* march, int size[2], int what) {
+// 	int step = 0;
+// 	for (i = 0; i < ccb->kheight; i++) {
+// 		for (j = 0; j < ccb->kwidth; j++) {
+// 			march[step++] = (j - mid_x) * color + (i - mid_y) * row_width;
+// 		}
+// 	}
+// 
+// }
+/*imconv2 - implement convolution on src and save to dst
+* dst: must not be NULL
+* ccb: defines the convolutional kernel, step etc. 
+* . . .See declaration of Conv2ConfigBox.
+*/
+Image imconv2(Image dst, Image src, Conv2ConfigBox *ccb) {
+	DEF_IMAGE_ROW_WIDTH(src, row, col, row_width);
+	int layer_cnt = 0;
+	int layer;
+	int color = imcolorCnt(src);
+	// resizeImage(dst, row * row_width);
+	int nsteps = ccb->kheight * ccb->kwidth;
+	int* march = (int *)malloc(nsteps * sizeof(int));
+	int* march_another = (int *)malloc(nsteps * sizeof(int));
+	int* march_fold = (int *)malloc(nsteps * sizeof(int));
+	int i, j, step;
+	int mid_x = ccb->kwidth / 2;
+	int mid_y = ccb->kheight / 2;
+	dst = duplicateImage(dst, src);
+	for (i = 0, step = 0; i < ccb->kheight; i++) {
+		for (j = 0; j < ccb->kwidth; j++) {
+			march[step++] = (j - mid_x) * color + (i - mid_y) * row_width;
+		}
+	}
+	memcpy(march_another, march, nsteps * sizeof(int));
+	image_t *kernel = ccb->kernel;
+	image_t conv_res;
+	image_t *src_ptr = NULL;
+	image_t *dst_ptr = NULL;
+	int bound_x, bound_y;
+	int start_x, start_y;
+	int step_by_bytes = color * sizeof(image_t);
+	if ((ccb->bounds)[1].x <= 1 && ccb->bounds[1].y <= 1) {
+		start_x = CAST_INT(ccb->bounds[0].x * col);
+		start_y = CAST_INT(ccb->bounds[0].y * row);
+		bound_x = CAST_INT(ccb->bounds[1].x * col);
+		bound_y = CAST_INT(ccb->bounds[1].y * row);
+	}
+	else {
+		start_x = CAST_INT(ccb->bounds[0].x);
+		start_y = CAST_INT(ccb->bounds[0].y);
+		bound_x = CAST_INT(ccb->bounds[1].x);
+		bound_y = CAST_INT(ccb->bounds[1].y);
+	}
+	// int i, j;
+	for (layer = ccb->layers[layer_cnt]; layer != -1;) {
+		for (i = start_y; i < bound_y; i++) {
+			dst_ptr = dst->im + i * row_width + layer + start_x * color;
+			src_ptr = src->im + i * row_width + layer + start_x * color;
+			if (i < mid_y) {
+				if (ccb->skip) continue;
+				memcpy(march, march_another, nsteps * sizeof(int));
+				int k;
+				int u;
+				for (k = 0; k < mid_y - i; k++) {
+					int inc = row_width * (mid_y - k);// (ccb->kheight - k - 1) * row_width;
+					int pos = ccb->kwidth * k;
+					for (u = 0; u < ccb->kwidth; u++) {
+						march[pos + u] = march_another[pos + u] + inc;
+					}
+				}
+			}
+			else if (i >= row - mid_y) {
+				if (ccb->skip) continue;
+				int k = ccb->kheight - (mid_y - (row - i)) - 1;
+				int u;
+				int dec = (mid_y - k) * row_width;
+				k *= ccb->kwidth;
+				for (u = 0; u < ccb->kwidth; u++) {
+					march[k + u] = march_another[k + u] + dec;
+					// printf("march[%d]=%d,dec=%d,i=%d,k=%d,u=%d\n", pos + u, march[pos + u], dec, i, k, u);
+				}
+			}
+			else if (i == mid_y) {
+				memcpy(march, march_another, nsteps * sizeof(int));
+			}
+			memcpy(march_fold, march, nsteps * sizeof(int));
+			for (j = start_x; j < bound_x; j++, src_ptr += color, dst_ptr += color) {
+				if (j < mid_y && ccb->skip) {
+					continue;
+				}
+				if (j == 0) {
+					int k;
+					int u;
+					int pos;
+					for (k = 0; k < ccb->kheight; k++) {
+						pos = ccb->kwidth * k;
+						for (u = 0; u < mid_x - j; u++) {
+							//mirror
+							march[pos + u] = march[pos + ccb->kwidth - u - 1];
+						}
+					}
+				}
+				else if (j == col - mid_x + 1) {
+					memcpy(march, march_fold, nsteps * sizeof(int));
+				}
+				else if (j >= col - mid_x) {
+					if (ccb->skip) continue;
+					int k;
+					int u;
+					int pos;
+					for (k = 0; k < ccb->kheight; k++) {
+						pos = ccb->kwidth * k;
+						for (u = 0; u < mid_x - (col - j); u++) {
+							//mirror
+							march[pos + ccb->kwidth - u - 1] = march[pos + u];
+							//printf("march[%d]= %d =march[%d],i=%d,k=%d,u=%d\n", pos + u, march[pos + u], pos + ccb->kwidth - u, i, k, u);
+						}
+					}
+				}
+
+				conv_res = 0.0f;
+				for (step = 0; step < nsteps; step++) {
+					int c = src_ptr - src->im;
+					int max = col * row;
+					image_t *thisone = src->im + i * row_width + layer + j * color;
+					int d = src_ptr - src->im;
+					conv_res += *(src_ptr + march[step]) * kernel[step];
+				}
+				*dst_ptr = conv_res;
+			}
+		}
+		layer = ccb->layers[++layer_cnt];
+	}
+	free(march);
+	free(march_another);
+	free(march_fold);
+	return dst;//-------------TODO
+}
+double normal_dist_engine(int x, int y, double sigma) {
+	static double coeff = 0.3989422; // 1 / sqrt(2 * pi)
+	return coeff / sigma * exp((x*x + y * y) / (-2.0) / sigma / sigma);
+}
+/* fspecial -- generate specail filter matrix
+* ["gaussian"], [size of kernel], [sigma]
+*/
+image_t* fspecial(const char *name, ...) {
+	if (name == NULL) {
+		throwWarn("fspecial::Expected filter name instead of nullptr.");
+		return NULL;
+	}
+	char *visit = (char *)&name + sizeof(const char *);
+	image_t *res = NULL;
+	if (strcmp(name, "laplacian") == 0) {
+		res = (image_t *)malloc(sizeof(image_t) * 3 * 3);
+		res[0] = -1; res[1] = -1; res[2] = -1;
+		res[3] = -1; res[4] =  8; res[5] = -1;
+		res[6] = -1; res[7] = -1; res[8] = -1;
+	}
+	else {
+		int *size = *(int **)visit;
+		int x = size[0];
+		int y = size[1];
+		int i, j;
+		if (x % 2 == 0 || y % 2 == 0) {
+			throwWarn("fspecial::Expected odd number for filter size.");
+			return NULL;
+		}
+		res = (image_t *)malloc(sizeof(image_t) * x * y);
+		image_t *ptr = res;
+		int mid_x = x / 2;
+		int mid_y = y / 2;
+		visit += sizeof(int *);
+		if (strcmp(name, "gaussian") == 0) {
+			double sigma = *(double *)visit;
+			image_t sum = 0;
+			for (i = 0; i < x; ++i) {
+				for (j = 0; j < y; ++j) {
+					*ptr = CAST_IMAGE_T(normal_dist_engine(i - mid_x, j - mid_y, sigma));
+					sum += *ptr++;
+				}
+			}
+			for (--ptr; ptr - res >= 0; --ptr) {
+				*ptr /= sum;
+			}
+		}
+		else if (strcmp(name, "average") == 0) {
+			int space = x * y;
+			double avg = 1.0 / space;
+			for (i = 0; i < space; i++) {
+				*ptr++ = CAST_IMAGE_T(avg);
+			}
+		}
+		else {
+			throwWarn("fspecial::Unexpected filter name: '%s'.", name);
+			free(res);
+			res = NULL;
+		}
+	}
+	return res;
+}
+
+/*imfilter - filter src with kernel
+* uses conv2, it only set up the environment
+* filtersz is an array of 2
+* bounds & filtersz can be NULL, which will be set to default
+* filtersz by default is [3,3]
+* bounds by default is the whole image
+*/
+Image imfilter(Image src, image_t *kernel, int *filtersz, Vector3 bounds[]) {
+	if (src == NULL || src->im == NULL) {
+		throwWarn("imfuse::Expected valid image data.");
+		return NULL;
+	}
+	if (kernel == NULL) {
+		throwWarn("imfuse::Expected valid conv kernel.");
+		return NULL;
+	}
+	Conv2ConfigBox ccb;
+	if (filtersz == NULL) {
+		ccb.kheight = 3;
+		ccb.kwidth = 3;
+		throwWarn("imfuse::filter size undefined, will be set to 3x3");
+	}
+	else {
+		ccb.kheight = filtersz[1];
+		ccb.kwidth = filtersz[0];
+	}
+	if (bounds != NULL) {
+		ccb.bounds[0] = bounds[0];
+		ccb.bounds[1] = bounds[1];
+	}
+	else {
+		ccb.bounds[0].y = ccb.bounds[0].x = 0;
+		ccb.bounds[1].y = ccb.bounds[1].x = 1;
+	}
+	int layers[] = {
+		0, 1, 2, -1,
+	};
+	ccb.kernel = kernel;
+	ccb.layers = layers;
+	ccb.step = 1;
+	// ccb.skip = (kernel[0] < 0);
+	ccb.skip = 0;
+	return imconv2(NULL, src, &ccb);
+}
+/*imfuse - fuse 2 images
+* lhs = alpha * lhs + beta * rhs + beta
+* only layers specified by layers will be merged
+* layers end with -1
+*/
+void imfuse(Image lhs, const Image rhs, image_t alpha, image_t beta, image_t delta, int *layers) {
+	// by default treverse all layers
+	static int default_layers[] = {
+		0,1,2,3,-1,
+	};
+	if (lhs == NULL || rhs == NULL || lhs->im == NULL || rhs->im == NULL) {
+		throwWarn("imfuse::Expected valid image data.");
+		return;
+	}
+	if (lhs->bmpInfo->biHeight != rhs->bmpInfo->biHeight || lhs->bmpInfo->biWidth != rhs->bmpInfo->biWidth) {
+		throwWarn("imfuse::Image size mismatch.");
+		return;
+	}
+	if (imcolorCnt(lhs) != imcolorCnt(rhs)) {
+		throwWarn("imfuse::Image dimension mismatch.");
+		return;
+	}
+	if (layers == NULL) {
+		layers = default_layers;
+	}
+	int sz = imsize(lhs);
+	int layer_cnt = 0;
+	DEF_IMAGE_ROW_WIDTH(lhs, row, col, row_width);
+	int color = imcolorCnt(lhs);
+	image_t *rhs_ptr = NULL;
+	for (; layers[layer_cnt] >= 0 && layer_cnt < color; layer_cnt++) {
+		FUNC_TRAVERSE_PIXEL(lhs->im, image_t, color * sizeof(image_t), row, col, row_width, {
+			rhs_ptr = rhs->im + row_width * i + layers[layer_cnt];
+			imptr += layers[layer_cnt];
+		}, {
+			*imptr = alpha * imptr[0] + beta * rhs_ptr[0] + delta;
+			rhs_ptr+=color;
+		});
+	}
+}
 
 void throwWarn(const char *s, ...)
 {
@@ -1293,7 +1606,6 @@ void throwWarn(const char *s, ...)
 	va_end(args);
 
 	GLIM_LOG_OUTPUT("\n");
-
 
 	if (!cnt) {
 		GLIM_LOG_OUTPUT("Program can proceed with warning, but may yield unexpected results.\n");
@@ -1314,14 +1626,36 @@ void throwNote(const char *s, ...)
 	GLIM_LOG_OUTPUT("\n");
 }
 
-#if 0
+#if !SCRIPT_EXECUTE
 int main()
 {
+	int filter_size[] = { 3, 3 };
+	Image im = imread("moon.png", NULL);
+
+	image_t *flap = fspecial("laplacian");
+	Image im_sharp = imfilter(im, flap, filter_size);
+	imfuse(im_sharp, im, 0.42f, 0.99f, 0.0f, NULL);
+	imwrite("moon_sharp.png", im_sharp);
+	throwNote("Image written to locontrast_sharp.png");
+	destroyImage(im);
+
+	im = imread("gorilla.jpg", NULL);
+	image_t *favg = fspecial("average", filter_size);
+	Image im_avg = imfilter(im, favg, filter_size);
+	imwrite("gorilla_avg.png", im_avg);
+	
+	int gaus_filter_sz[] = { 9, 9 };
+	image_t *fgaus = fspecial("gaussian", gaus_filter_sz, 3.0);
+	Image im_gaus = imfilter(im, fgaus, gaus_filter_sz);
+	imwrite("gorilla_gaus.png", im_gaus);
+
+	// image_t *flap = fspecial("laplacian");
+	// Image im_sharp = imfilter(im_gaus, flap, filter_size);
+	// imfuse(im_sharp, im_gaus, -1.0f, 1.0f, 0.0f, NULL);
+	// imwrite("gorilla_resharp.png", im_sharp);
+
+	/*
 	int idx[] = { 2, -1 };
-
-	
-
-	
 	Image im = imread("./madrid_hdr.bmp", NULL);
 	
 	STConfig stc = newSTConfig(NULL);
@@ -1354,7 +1688,7 @@ int main()
 	imwrite("./madrid_trans.png", im_trans);
 	im_trans = destroyImage(im_trans);
 	throwNote("Image After translation saved at madrid_trans.png");
-	
+	*/
 	/*
 	Image hist = rgb2hsv(NULL, im_lo);
 	histequal(hist, hist, idx);

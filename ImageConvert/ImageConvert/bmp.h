@@ -50,14 +50,25 @@ EXTERNC Image histequal(Image dst, Image src, int *chnls);
 EXTERNC void denoise_medianFilter(Image src, image_t max, image_t min);
 EXTERNC void smooth_ExpAvg(Image src, image_t beta, image_t threshold);
 
-EXTERNC void BinlinerInterpolation(Image src, Pixel *res, double x, double y, int color);
+//image filter using convolution
+EXTERNC Image imconv2(Image dst, Image src, Conv2ConfigBox *ccb);
+EXTERNC image_t* fspecial(const char *name, ...);
+EXTERNC Image imfilter(Image src, image_t *kernel, int *filtersz, Vector3 bounds[]);
+EXTERNC void imfuse(Image lhs, const Image rhs, image_t alpha, image_t beta, image_t delta, int *layers);
 
+/******************************
+* spatial transformations
+*/
+//auxilaries for spacial transform
+EXTERNC void BinlinerInterpolation(Image src, Pixel *res, double x, double y, int color);
+EXTERNC STConfig newSTConfig(const char *fmt, ...);
+
+//implement spatial transform
 EXTERNC Image imtranslate2d(Image src, Vector3 direction, STConfig stc);
 EXTERNC Image imrotate2d(Image src, double theta, Vector3 *axis, STConfig stc);
 EXTERNC Image imscale2d(Image src, Vector3 scaler, STConfig stc);
 EXTERNC Image imflip2d(Image src, Vector3 mirror, STConfig stc);
 EXTERNC Image imshear2d(Image src, Vector3 factor, STConfig stc);
 
-EXTERNC STConfig newSTConfig(const char *fmt, ...);
 #undef EXTERNC
 #endif
